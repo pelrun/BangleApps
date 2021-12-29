@@ -1,0 +1,16 @@
+{
+  "id": "mooshi",
+  "name": "Mooshimeter DMM",
+  "shortName":"Mooshimeter",
+  "version":"0.01",
+  "description": "Connect to a Mooshimeter BLE multimeter and display the live meter readings",
+  "icon": "mooshi.png",
+  "tags": "tool",
+  "supports" : ["BANGLEJS2"],
+  "readme": "README.md",
+  "storage": [
+    {"name":"mooshi.app.js","url":"app.js"},
+    {"name":"pako.js","url":"pako_inflate.es5.min.js"},
+    {"name":"mooshi.img","url":"app-icon.js","evaluate":true}
+  ]
+}
