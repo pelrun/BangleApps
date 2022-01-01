@@ -1,5 +1,5 @@
 
-var pako = require('pako.js');
+//var pako = require('pako.js');
 //var CRC = require('crc32.js');
 
 function showLog(txt) {
@@ -9,8 +9,8 @@ function showError(txt) {
   console.log(txt);
 }
 
-process.on('uncaughtException', function(e) {
-  console.log(e,e.stack?"\n"+e.stack:"");
+process.on('uncaughtException', function (e) {
+  console.log(e, e.stack ? "\n" + e.stack : "");
 });
 
 METER_SERVICE = "1BC5FFA0-0200-62AB-E411-F254E005DBD4";
@@ -46,42 +46,48 @@ function MeterSerializer(p, meter, callback) {
   }).then((ch) => {
     this.reader = ch;
     ch.on('characteristicvaluechanged', (event) => {
+      //console.log(event);
       this.meter.readFromMeter(null, event.target.value.buffer);
     });
     return ch.startNotifications();
   }).then(() => {
     console.log("Connected!");
     return callback();
+  }).catch((err) => {
+    console.log("Connection failed! " + err);
+    if (this.gatt && this.gatt.connected) {
+      this.gatt.disconnect();
+    }
+    E.showMenu(menu);
   });
-  // .catch(() => {
-  //     console.log("Connection failed!");
-  //     if (this.gatt && this.gatt.connected) {
-  //         this.gatt.disconnect();
-  //     }
-  // });
 }
+
+//////////////////////////////////////////////////////////////
 
 MeterSerializer.prototype.handleError = function (err) {
   if (err) {
     showLog("Error: " + err);
   }
-}
+};
 
 MeterSerializer.prototype.disconnect = function () {
   this.gatt.disconnect();
   this.gatt = {};
-}
+};
+
 MeterSerializer.prototype.write = function (bytes) {
   this.writer.writeValue(bytes);
-}
+};
 
 MeterSerializer.prototype.onNotify = function (err) {
   //if(this.desc)
   //this.reader.readValue(this.meter.readFromMeter.bind(this));
-}
+};
+
 MeterSerializer.prototype.onData = function (data, isNotification) {
   this.meter.readFromMeter(null, data.target.value.buffer);
-}
+};
+
 /*
 MeterSerializer.prototype.onDescData = function(data, isNotification) {
     //print(".\n");
@@ -89,8 +95,10 @@ MeterSerializer.prototype.onDescData = function(data, isNotification) {
         if(this.desc)
             this.desc.readValue(this.meter.readFromMeter.bind(this));
     }
-}
+};
 */
+
+//////////////////////////////////////////////////////////////
 
 function NTYPE() {
 }
@@ -127,6 +135,8 @@ NTYPE.c_type_dict = {
 function default_handler(meter, payload) {
 }
 
+//////////////////////////////////////////////////////////////
+
 function ConfigNode(ntype, name, children) {
   if (typeof (children) == "undefined")
     children = [];
@@ -157,10 +167,10 @@ ConfigNode.prototype.toString = function () {
   if (this.value.length)
     s += ":" + this.value.toString();
   return s;
-}
+};
 ConfigNode.prototype.getIndex = function () {
   return this.parent.children.indexOf(this);
-}
+};
 ConfigNode.prototype.getPath = function (rval) {
   if (typeof (rval) == "undefined")
     rval = [];
@@ -169,32 +179,35 @@ ConfigNode.prototype.getPath = function (rval) {
     rval.append(self.getIndex());
   }
   return rval;
-}
+};
 ConfigNode.prototype.getLongName = function (rval, sep) {
   sep = (typeof (sep) == "undefined") ? '_' : sep;
 
   if (typeof (rval) == "undefined")
     rval = this.name;
   else
-    rval = sep.join((this.name, rval))
+    rval = sep.join((this.name, rval));
   if (!this.parent)
     return rval.slice(1);
   else
     return this.parent.getLongName(rval);
-}
+};
 ConfigNode.prototype.needsShortCode = function () {
   if (this.ntype == NTYPE.PLAIN ||
     this.ntype == NTYPE.LINK)
     return false;
   return true;
-}
+};
 ConfigNode.prototype.assignShortCode = function (code) {
   this.code = code;
-}
+};
+
+//////////////////////////////////////////////////////////////
 
 function ConfigTree(root) {
   this.root = root;
 }
+
 ConfigTree.prototype.enumerate = function (n, indent) {
   if (typeof (n) == "undefined")
     n = this.root;
@@ -207,55 +220,35 @@ ConfigTree.prototype.enumerate = function (n, indent) {
   }
   if (!indent)
     showLog("");
-}
-ConfigTree.prototype.serialize = function () {
-  // Decided not to use msgpack for simplicity.  We have such a reductive structure we can do it
-  // more easily ourselves
-  var r = new Uint8Array([]);
-  this.walk((node) => {
-    r.append(node.ntype);
-    r.append(len(node.name));
-    for (c in node.name)
-      r.append(ord(c));
-    r.append(node.children.length);
-  });
-  return r.decode('ascii');
-}
-ConfigTree.prototype.deserialize = function (bytes) {
+};
+
+ConfigTree.prototype.deserialize = function (buffer, offset) {
+  var bytes = Uint8Array(buffer, offset);
   var ntype = bytes[0];
   var nlen = bytes[1];
-  var name = String.fromCharCode.apply(null, new Uint8Array(bytes.slice(2, 2 + nlen)));
+  var name = nlen > 0 ? String.fromCharCode.apply(null, Uint8Array(buffer, 2 + offset, nlen)) : "";
   var n_children = bytes[2 + nlen];
-  bytes = bytes.slice(3 + nlen);
+  offset += 3 + nlen;
   var children = [];
   for (var i = 0; i < n_children; i++) {
     // bytes must be passed by reference for this to work.
-    var obj = this.deserialize(bytes);
+    var obj = this.deserialize(buffer, offset);
     children[i] = obj.node;
-    bytes = obj.bytes;
+    offset = obj.offset;
   }
   return {
     node: new ConfigNode(ntype, name, children),
-    bytes: bytes
+    offset: offset
   };
-}
-ConfigTree.prototype.pack = function () {
-  var plain = this.serialize();
-  var compressed = pako.deflate(plain);
-  return compressed;
-}
+};
 
 ConfigTree.prototype.unpack = function (compressed) {
-  var data = pako.inflate(compressed);
-  // Convert gunzipped byteArray back to ascii string:
-  var bytes = new Uint8Array(data);
-  var strData = String.fromCharCode.apply(null, bytes);
-  //var bytes = str2ab(plain);
-  //var bytes = plain;
-  var obj = this.deserialize(data);
+  // Too expensive to decompress supplied tree, so supply it ourselves
+  var data = require("heatshrink").decompress(atob("AAMNgEFoNEptJp0DgsFodSoczmUAhUEqlSotFgEJhVEpNBo9Op9TqlJocAgcLqFDoVfq1FqVTpNPpwaBglOoNNEIMFhAaBAwNfqtUD4MEhYKHr9NqcAhcFoVBqgtBgECgxIBoVPp9UgUAgxHBqVNoNMNoMIqdIpNQptPog9BBQREBqFMPANHgcCglSF4NFg5lBmMymoXBgYEBmAFCAgIFCgkxAoIGDmQGFmgGFnAGDgUFIgNQqlIggIBWYQEBm00GYQ/BnA/EmwPBg7EBpNHo6wBgYPBp9GowVBgy5BNINMOwUKobBBVgNOqtPqqoBDYNMp9Hg5/BaYUEhATBQYNSqykCgYrBqiPBDwUDg9Qp9MplEpNSDoMGNgI8BD4J8CEwNGp8DgkFAwIRBrEAgsIooHBr77DBQMHp1foVZEQJVCH4T4BbgIlJgyCCqY+BPYMEohYBoJ2CodImMIUQNNoNQqD/DgEHodVqQxBP4MBW4LwBMYRFBptQBYMDmc1BgMBJgNIoIbBoiMCqVBFYNFr9JEYMIBAKmBrLQBqY5Bgh5BBgJQCqVNO4dCqpnBYYMAhcFYwVVSQMLO5EDDIRBCAoSjBqApBhcOBIdMqdCmRIBXgNWawSRCmSRMqz5BVIJuBgRtBmyRCgYEBS/6X0gRlGKAMFoNVrFfqwHBgcwl0xK4QFBmYFCmMumQFBhQfBOQSsBp1DosFNQMxVAIbBVYUHBAYJEhAJEBQkJBQoLEhQLGBgkFolJp9EoraCKIcLhBRBU4NfqFXWII="));
+  var obj = this.deserialize(data, 0);
   this.root = obj.node;
   this.assignShortCodes();
-}
+};
 
 ConfigTree.prototype.assignShortCodes = function () {
   function on_each(node) {
@@ -270,10 +263,9 @@ ConfigTree.prototype.assignShortCodes = function () {
     }
   }
 
-  // TODO: Rename this function... it's become a general reference refresher for the tree
   var g_code = [0];
   this.walk(on_each.bind(this));
-}
+};
 
 ConfigTree.prototype.getNodeAtLongname = function (longname) {
   var longname = longname.toUpperCase();
@@ -294,15 +286,15 @@ ConfigTree.prototype.getNodeAtLongname = function (longname) {
       return null;
   }
   return n;
-}
+};
 
 ConfigTree.prototype.getNodeAtPath = function (path) {
   var n = this.root;
-  for (i in path) {
+  for (var i in path) {
     n = n.children[i];
   }
   return n;
-}
+};
 
 ConfigTree.prototype.walk = function (call_on_each, node) {
   if (!node) {
@@ -314,7 +306,7 @@ ConfigTree.prototype.walk = function (call_on_each, node) {
     call_on_each(c);
     this.walk(call_on_each, c);
   }
-}
+};
 
 ConfigTree.prototype.getShortCodeList = function () {
   function for_each(node) {
@@ -325,7 +317,9 @@ ConfigTree.prototype.getShortCodeList = function () {
   var rval = {};
   this.walk(for_each);
   return rval;
-}
+};
+
+//////////////////////////////////////////////////////////////
 
 // Helper class to pack and unpack integers and floats from a buffer
 function BytePack(bytebuf) {
@@ -335,14 +329,15 @@ function BytePack(bytebuf) {
 
 BytePack.prototype.putByte = function (v) {
   this.bytes.push(v);
-}
+};
 
 BytePack.prototype.putBytes = function (v) {
   for (var i = 0; i < v.length; i++) {
     var byte = v[i];
     this.putByte(byte);
   }
-}
+};
+
 BytePack.prototype.putInt = function (v, b) {
   b = (typeof (b) == "undefined") ? 1 : b;
   while (b) {
@@ -350,7 +345,8 @@ BytePack.prototype.putInt = function (v, b) {
     v >>= 8;
     b -= 1;
   }
-}
+};
+
 BytePack.prototype.putFloat = function (v, b) {
   b = (typeof (b) == "undefined") ? 1 : b;
   var farr = new Float32Array(b);
@@ -358,7 +354,7 @@ BytePack.prototype.putFloat = function (v, b) {
     farr[i] = v[i];
   var barr = new Uint8Array(farr.buffer);
   this.putBytes(barr);
-}
+};
 
 BytePack.prototype.get = function (b, signed, t) {
   b = (typeof (b) == "undefined") ? 1 : b;
@@ -387,10 +383,9 @@ BytePack.prototype.get = function (b, signed, t) {
   else if (t == "float") {
     if (4 > this.getBytesRemaining())
       throw "UnderflowException";
-    var barr = this.bytes.slice(this.i, this.i + 4);
-    var farr = new Float32Array(barr.buffer);
+    var f = DataView(this.bytes.buffer).getFloat32(this.i, true);
     this.i += 4;
-    return farr[0];
+    return f;
   }
   else {
     throw "bad type";
@@ -410,12 +405,13 @@ BytePack.prototype.getBytesRemaining = function () {
   return this.bytes.length - this.i;
 };
 
+//////////////////////////////////////////////////////////////
+
 function bufferCat(a, b) {
-  var c = new (a.constructor)(a.length + b.length);
+  var c = new (b.constructor)(a.length + b.length);
   c.set(a, 0);
   c.set(b, a.length);
   return c;
-  //return Buffer.concat([a,b]);
 }
 
 // Test of config tree build
@@ -433,19 +429,19 @@ function buildTree() {
   return tree;
 }
 
+//////////////////////////////////////////////////////////////
+
 function Mooshimeter() {
   this.seq_n = 0;
   this.aggregate = new Uint8Array([]);
 
   function expandReceivedTree(meter, payload) {
-    var payload_str = String.fromCharCode.apply(String, payload);
     this.tree.unpack(payload);
     this.code_list = this.tree.getShortCodeList();
     this.tree.enumerate();
     // Calculate the CRC32 of received tree
     crc_node = this.tree.getNodeAtLongname('ADMIN:CRC32');
-    //crc_node.value = CRC.bstr(payload_str);
-    crc_node.value = E.CRC32(payload_str);
+    crc_node.value = 0xE9B18BB4; // E.CRC32(payload);
   }
 
   // Initialize tree
@@ -455,14 +451,6 @@ function Mooshimeter() {
   var node = this.tree.getNodeAtLongname('ADMIN:TREE');
   node.notification_handler = expandReceivedTree.bind(this);
 }
-
-Mooshimeter.isMooshimeter = function (p, callback) {
-  if (p.advertisement.serviceUuids.length &&
-    (p.advertisement.serviceUuids[0].toUpperCase() == METER_SERVICE ||
-      p.advertisement.serviceUuids[0].toUpperCase() == METER_SERVICE.replace(/-/g, "")))
-    return true;
-  return false;
-};
 
 Mooshimeter.prototype.connect = function (serializer, callback) {
   function waitForConnect() {
@@ -490,15 +478,14 @@ Mooshimeter.prototype.sendCommand = function (cmd) {
   // cmd might contain a payload, in which case split it out
   var arr = cmd.split(' ');
   node_str = arr[0];
-  payload_str = "";
-  if (arr.length > 1)
-    payload_str = arr[1];
+  payload_str = (arr.length > 1) ? arr[1] : "";
 
   var node = this.tree.getNodeAtLongname(node_str);
   if (!node) {
     showLog('Node ' + node_str + ' not found!');
     return;
   }
+
   if (node.code == -1) {
     if (node.needsShortCode()) {
       showLog('This command does not have a value associated.');
@@ -512,53 +499,45 @@ Mooshimeter.prototype.sendCommand = function (cmd) {
     b.putByte(node.code);
   }
   else {
+
     b.putByte(node.code + 0x80);
-    if (node.ntype == NTYPE.PLAIN) {
-      showLog("This command doesn't accept a payload");
-      return;
-    }
-    else if (node.ntype == NTYPE.CHOOSER) {
-      b.putInt(parseInt(payload_str))
-    }
-    else if (node.ntype == NTYPE.LINK) {
-      showLog("This command doesn't accept a payload");
-      return;
-    }
-    else if (node.ntype == NTYPE.VAL_U8) {
-      b.putInt(parseInt(payload_str))
-    }
-    else if (node.ntype == NTYPE.VAL_U16) {
-      b.putInt(parseInt(payload_str), 2);
-    }
-    else if (node.ntype == NTYPE.VAL_U32) {
-      b.putInt(parseInt(payload_str), 4);
-    }
-    else if (node.ntype == NTYPE.VAL_S8) {
-      b.putInt(int(payload_str));
-    }
-    else if (node.ntype == NTYPE.VAL_S16) {
-      b.putInt(parseInt(payload_str), 2);
-    }
-    else if (node.ntype == NTYPE.VAL_S32) {
-      b.putInt(parseInt(payload_str), 4);
-    }
-    else if (node.ntype == NTYPE.VAL_STR) {
-      b.putInt(payload_str.length, 2);
-      b.putBytes(payload_str);
-    }
-    else if (node.ntype == NTYPE.VAL_BIN) {
-      showLog("This command doesn't accept a payload");
-      return;
-    }
-    else if (node.ntype == NTYPE.VAL_FLT) {
-      b.putFloat(parseFloat(payload_str));
-    }
-    else {
-      // error
+
+    switch (node.ntype) {
+      case NTYPE.CHOOSER:
+        b.putInt(parseInt(payload_str));
+        break;
+      case NTYPE.VAL_U8:
+        b.putInt(parseInt(payload_str));
+        break;
+      case NTYPE.VAL_S8:
+        b.putInt(int(payload_str));
+        break;
+      case NTYPE.VAL_U16:
+        b.putInt(parseInt(payload_str), 2);
+        break;
+      case NTYPE.VAL_S16:
+        b.putInt(parseInt(payload_str), 2);
+        break;
+      case NTYPE.VAL_U32:
+        b.putInt(parseInt(payload_str), 4);
+        break;
+      case NTYPE.VAL_S32:
+        b.putInt(parseInt(payload_str), 4);
+        break;
+      case NTYPE.VAL_FLT:
+        b.putFloat(parseFloat(payload_str));
+        break;
+      case NTYPE.VAL_STR:
+        b.putInt(payload_str.length, 2);
+        b.putBytes(payload_str);
+        break;
+      default:
+        showLog("This command doesn't accept a payload");
+        return;
     }
   }
   this.writeToMeter(b.bytes);
-}
+};
 
 Mooshimeter.prototype.loadTree = function () {
   this.sendCommand('ADMIN:TREE');
@@ -579,10 +558,10 @@ Mooshimeter.prototype.writeToMeter = function (bytes) {
   if (bytes.length > 19)
     Error("Payload too long!");
   // Put in the sequence number
-  var b = new BytePack();
-  b.putByte(0); // seq ntrue
-  b.putBytes(bytes);
-  this.serializer.write(b.getBytes());
+  var b = new Uint8Array(bytes.length + 1);
+  b[0] = 0; // seq ntrue
+  b.set(bytes, 1);
+  this.serializer.write(b);
 };
 
 Mooshimeter.prototype.readFromMeter = function (err, bytes) {
@@ -596,12 +575,14 @@ Mooshimeter.prototype.readFromMeter = function (err, bytes) {
     showLog('Got     : ' + seq_n);
   }
   this.seq_n = seq_n;
-  this.aggregate = bufferCat(this.aggregate, b.bytes.slice(1));
+  this.aggregate = bufferCat(this.aggregate, Uint8Array(bytes, 1));
   // Attempt to decode a message, if we succeed pop the message off the byte queue
   while (this.aggregate.length > 0) {
     try {
       var b = new BytePack(this.aggregate);
       var shortcode = b.get();
+      var value;
+
       try {
         node = this.code_list[shortcode];
       }
@@ -613,57 +594,61 @@ Mooshimeter.prototype.readFromMeter = function (err, bytes) {
         showError("bad ntype");
       }
       else if (node.ntype == NTYPE.CHOOSER)
-        node.notification_handler(this, b.get(1));
+        value = b.get(1);
       else if (node.ntype == NTYPE.LINK)
         showError("bad ntype");
       else if (node.ntype == NTYPE.VAL_U8)
-        node.notification_handler(this, b.get(1));
+        value = b.get(1);
       else if (node.ntype == NTYPE.VAL_U16)
-        node.notification_handler(this, b.get(2));
+        value = b.get(2);
       else if (node.ntype == NTYPE.VAL_U32)
-        node.notification_handler(this, b.get(4));
+        value = b.get(4);
       else if (node.ntype == NTYPE.VAL_S8)
-        node.notification_handler(this, b.get(1, true))
+        value = b.get(1, true);
       else if (node.ntype == NTYPE.VAL_S16)
-        node.notification_handler(this, b.get(2, true))
+        value = b.get(2, true);
       else if (node.ntype == NTYPE.VAL_S32)
-        node.notification_handler(this, b.get(4, true))
-      else if (node.ntype == NTYPE.VAL_STR) {
+        value = b.get(4, true);
+      else if (node.ntype == NTYPE.VAL_STR || node.ntype == NTYPE.VAL_BIN) {
         var expecting_bytes = b.get(2);
         if (b.getBytesRemaining() < expecting_bytes)
           return; //abort!
-        node.notification_handler(this, b.getBytes(expecting_bytes));
-      }
-      else if (node.ntype == NTYPE.VAL_BIN) {
-        var expecting_bytes = b.get(2);
-        if (b.getBytesRemaining() < expecting_bytes)
-          return; //abort!
-        node.notification_handler(this, b.getBytes(expecting_bytes));
+        value = b.getBytes(expecting_bytes);
       }
       else if (node.ntype == NTYPE.VAL_FLT) {
-        node.notification_handler(this, b.get(4, true, "float"));
+        value = b.get(4, true, "float");
       }
       else
-        showError('Unknwn');
+        showError('Unknown');
+
+      if (value != undefined) {
+        console.log(node, value);
+        node.notification_handler(this, value);
+      }
       this.aggregate = this.aggregate.slice(b.i);
     }
-    catch (UnderflowException) {
-      // An underflow exception here does not indicate anything sinister.  It just means we had to split a packet.
-      // across multiple BLE connection events.
-      //showLog('underflow');
-      return;
+    catch (e) {
+      if (e == "UnderflowException") {
+        // An underflow exception here does not indicate anything sinister.  It just means we had to split a packet.
+        // across multiple BLE connection events.
+        //showLog('underflow');
+        return;
+      }
+      console.log(e + e.stack);
     }
   }
 };
 
 function run(m) {
-  m.sendCommand('sampling:rate 0');       // Rate 125Hz
-  m.sendCommand('sampling:depth 2');      // Depth 256
-  m.sendCommand('ch1:mapping 1');         // CH1 select current input
-  m.sendCommand('ch1:range_i 0');         // CH1 10A range
-  m.sendCommand('ch2:mapping 1');         // CH2 select voltage input
-  m.sendCommand('ch2:range_i 1');         // CH2 Voltage 600V range
-  m.sendCommand('sampling:trigger 2');    // Trigger continuous
+  console.log("Running");
+
+  // m.sendCommand('sampling:rate 0');       // Rate 125Hz
+  // m.sendCommand('sampling:depth 2');      // Depth 256
+  // m.sendCommand('ch1:mapping 1');         // CH1 select current input
+  // m.sendCommand('ch1:range_i 0');         // CH1 10A range
+  // m.sendCommand('ch2:mapping 1');         // CH2 select voltage input
+  // m.sendCommand('ch2:range_i 1');         // CH2 Voltage 600V range
+  // m.sendCommand('sampling:trigger 2');    // Trigger continuous
 
   m.attachCallback('ch1:value', printCH1Value);
   m.attachCallback('ch2:value', printCH2Value);
