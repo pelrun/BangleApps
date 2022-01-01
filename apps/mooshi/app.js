@@ -1,7 +1,4 @@
 
-//var pako = require('pako.js');
-//var CRC = require('crc32.js');
-
 function showLog(txt) {
   console.log(txt);
 }
@@ -66,7 +63,7 @@ function MeterSerializer(p, meter, callback) {
 
 MeterSerializer.prototype.handleError = function (err) {
   if (err) {
-    showLog("Error: " + err);
+    showLog("Errar: " + err);
   }
 };
 
@@ -88,33 +85,23 @@ MeterSerializer.prototype.onData = function (data, isNotification) {
   this.meter.readFromMeter(null, data.target.value.buffer);
 };
 
-/*
-MeterSerializer.prototype.onDescData = function(data, isNotification) {
-    //print(".\n");
-    if(isNotification) {
-        if(this.desc)
-            this.desc.readValue(this.meter.readFromMeter.bind(this));
-    }
-};
-*/
-
 //////////////////////////////////////////////////////////////
 
 function NTYPE() {
 }
 
-NTYPE.PLAIN = 0;  // May be an informational node, or a choice in a chooser
-NTYPE.LINK = 1;  // A link to somewhere else in the tree
-NTYPE.CHOOSER = 2;  // The children of a CHOOSER can only be selected by one CHOOSER, and a CHOOSER can only select one child
-NTYPE.VAL_U8 = 3;  // These nodes have readable and writable values of the type specified
-NTYPE.VAL_U16 = 4;  // These nodes have rodes have readable and writable values of the type specified
-NTYPE.VAL_U32 = 5;  // These nodes have readable and writable values of the type specified
-NTYPE.VAL_S8 = 6;  // These nodes have readable and writable values of the type specified
-NTYPE.VAL_S16 = 7;  // These nodes have readable and writable values of the type specified
-NTYPE.VAL_S32 = 8;  // These nodes have readable and writable values of the type specified
-NTYPE.VAL_STR = 9;  // These nodes have readable and writable values of the type specified
-NTYPE.VAL_BIN = 10; // These nodes have readable and writable values of the type specified
-NTYPE.VAL_FLT = 11; // These nodes have readable and writable values of the type specified
+NTYPE.PLAIN = 0;
+NTYPE.LINK = 1;
+NTYPE.CHOOSER = 2;
+NTYPE.VAL_U8 = 3;
+NTYPE.VAL_U16 = 4;
+NTYPE.VAL_U32 = 5;
+NTYPE.VAL_S8 = 6;
+NTYPE.VAL_S16 = 7;
+NTYPE.VAL_S32 = 8;
+NTYPE.VAL_STR = 9;
+NTYPE.VAL_BIN = 10;
+NTYPE.VAL_FLT = 11;
 
 NTYPE.code_list = ['PLAIN', 'LINK', 'CHOOSER', 'VAL_U8', 'VAL_U16', 'VAL_U32', 'VAL_S8',
   'VAL_S16', 'VAL_S32', 'VAL_STR', 'VAL_BIN', 'VAL_FLT'];
@@ -268,7 +255,7 @@ ConfigTree.prototype.assignShortCodes = function () {
 };
 
 ConfigTree.prototype.getNodeAtLongname = function (longname) {
-  var longname = longname.toUpperCase();
+  longname = longname.toUpperCase();
   var tokens = longname.split(':');
   var n = this.root;
   for (var i = 0; i < tokens.length; i++) {
@@ -321,10 +308,9 @@ ConfigTree.prototype.getShortCodeList = function () {
 
 //////////////////////////////////////////////////////////////
 
-// Helper class to pack and unpack integers and floats from a buffer
 function BytePack(bytebuf) {
   this.i = 0;
-  this.bytes = (typeof (bytebuf) == "undefined") ? [] : bytebuf;
+  this.bytes = [];
 }
 
 BytePack.prototype.putByte = function (v) {
@@ -356,7 +342,25 @@ BytePack.prototype.putFloat = function (v, b) {
   this.putBytes(barr);
 };
 
-BytePack.prototype.get = function (b, signed, t) {
+function ByteUnpack(bytebuf) {
+  this.i = 0;
+  this.bytes = bytebuf;
+}
+
+ByteUnpack.prototype.getBytes = function (max_bytes) {
+  if (typeof (max_bytes) == "undefined")
+    rval = this.bytes.slice(this.i);
+  else
+    rval = this.bytes.slice(this.i, this.i + max_bytes);
+  this.i += rval.length;
+  return rval;
+};
+
+ByteUnpack.prototype.getBytesRemaining = function () {
+  return this.bytes.length - this.i;
+};
+
+ByteUnpack.prototype.get = function (b, signed, t) {
   b = (typeof (b) == "undefined") ? 1 : b;
   signed = (typeof (signed) == "undefined") ? false : signed;
   t = (typeof (t) == "undefined") ? "int" : t;
@@ -383,26 +387,15 @@ BytePack.prototype.get = function (b, signed, t) {
   else if (t == "float") {
     if (4 > this.getBytesRemaining())
       throw "UnderflowException";
-    var f = DataView(this.bytes.buffer).getFloat32(this.i, true);
+    var f = 0;
+    if (this.bytes.buffer != undefined)
+      f = DataView(this.bytes.buffer).getFloat32(this.i, true);
     this.i += 4;
     return f;
   }
   else {
     throw "bad type";
   }
-};
-
-BytePack.prototype.getBytes = function (max_bytes) {
-  if (typeof (max_bytes) == "undefined")
-    rval = this.bytes.slice(this.i);
-  else
-    rval = this.bytes.slice(this.i, this.i + max_bytes);
-  this.i += rval.length;
-  return rval;
-};
-
-BytePack.prototype.getBytesRemaining = function () {
-  return this.bytes.length - this.i;
 };
 
 //////////////////////////////////////////////////////////////
@@ -435,39 +428,26 @@ function Mooshimeter() {
   this.seq_n = 0;
   this.aggregate = new Uint8Array([]);
 
-  function expandReceivedTree(meter, payload) {
+  // Initialize tree
+  this.tree = buildTree();
+  this.code_list = this.tree.getShortCodeList();
+}
+
+Mooshimeter.prototype.connect = function (serializer, callback) {
+  E.showMessage("initializing");
+
+  this.serializer = serializer;
+  this.sendCommand('ADMIN:TREE').then((payload) => {
     this.tree.unpack(payload);
     this.code_list = this.tree.getShortCodeList();
     this.tree.enumerate();
     // Calculate the CRC32 of received tree
     crc_node = this.tree.getNodeAtLongname('ADMIN:CRC32');
     crc_node.value = 0xE9B18BB4; // E.CRC32(payload);
-  }
-
-  // Initialize tree
-  this.tree = buildTree();
-  this.code_list = this.tree.getShortCodeList();
-  // Assign an expander function to the tree node
-  var node = this.tree.getNodeAtLongname('ADMIN:TREE');
-  node.notification_handler = expandReceivedTree.bind(this);
-}
-
-Mooshimeter.prototype.connect = function (serializer, callback) {
-  function waitForConnect() {
-    if (this.tree.getNodeAtLongname('SAMPLING:TRIGGER') == null) {
-      setTimeout(waitForConnect.bind(this), 200);
-      return;
-    }
-    // Unlock the meter by writing the correct CRC32 value
-    // The CRC32 node's value is written when the tree is received
-    this.sendCommand('admin:crc32 ' + this.tree.getNodeAtLongname('admin:crc32').value);
+    return this.sendCommand('admin:crc32 ' + crc_node.value);
+  }).then(() => {
     callback(true);
-  }
-
-  this.serializer = serializer;
-  this.loadTree();
-  // Wait for us to load the command tree
-  waitForConnect.call(this);
+  });
 };
 
 Mooshimeter.prototype.disconnect = function () {
@@ -475,7 +455,6 @@ Mooshimeter.prototype.disconnect = function () {
 };
 
 Mooshimeter.prototype.sendCommand = function (cmd) {
-  // cmd might contain a payload, in which case split it out
   var arr = cmd.split(' ');
   node_str = arr[0];
   payload_str = (arr.length > 1) ? arr[1] : "";
@@ -537,10 +516,7 @@ Mooshimeter.prototype.sendCommand = function (cmd) {
     }
   }
   this.writeToMeter(b.bytes);
-};
-
-Mooshimeter.prototype.loadTree = function () {
-  this.sendCommand('ADMIN:TREE');
+  return new Promise((resolve) => { node.notification_handler = resolve; });
 };
 
 Mooshimeter.prototype.attachCallback = function (node_path, notify_cb) {
@@ -567,7 +543,7 @@ Mooshimeter.prototype.writeToMeter = function (bytes) {
 Mooshimeter.prototype.readFromMeter = function (err, bytes) {
   if (bytes.length == 0)
     return;
-  var b = new BytePack(bytes);
+  var b = new ByteUnpack(bytes);
   var seq_n = b.get(1) & 0xFF;
   if (seq_n != (this.seq_n + 1) % 0x100) {
     showLog('Received out of order packet!');
@@ -579,7 +555,7 @@ Mooshimeter.prototype.readFromMeter = function (err, bytes) {
   // Attempt to decode a message, if we succeed pop the message off the byte queue
   while (this.aggregate.length > 0) {
     try {
-      var b = new BytePack(this.aggregate);
+      b = new ByteUnpack(this.aggregate);
       var shortcode = b.get();
       var value;
 
@@ -625,16 +601,15 @@ Mooshimeter.prototype.readFromMeter = function (err, bytes) {
         console.log(node, value);
         node.notification_handler(this, value);
       }
-      this.aggregate = this.aggregate.slice(b.i);
+      this.aggregate = Uint8Array(this.aggregate.slice(b.i));
     }
     catch (e) {
       if (e == "UnderflowException") {
-        // An underflow exception here does not indicate anything sinister.  It just means we had to split a packet.
-        // across multiple BLE connection events.
-        //showLog('underflow');
+        // full packet not received yet
         return;
       }
       console.log(e + e.stack);
+      break;
     }
   }
 };
@@ -642,18 +617,24 @@ Mooshimeter.prototype.readFromMeter = function (err, bytes) {
 function run(m) {
   console.log("Running");
 
-  // m.sendCommand('sampling:rate 0');       // Rate 125Hz
-  // m.sendCommand('sampling:depth 2');      // Depth 256
-  // m.sendCommand('ch1:mapping 1');         // CH1 select current input
-  // m.sendCommand('ch1:range_i 0');         // CH1 10A range
-  // m.sendCommand('ch2:mapping 1');         // CH2 select voltage input
-  // m.sendCommand('ch2:range_i 1');         // CH2 Voltage 600V range
-  // m.sendCommand('sampling:trigger 2');    // Trigger continuous
-
   m.attachCallback('ch1:value', printCH1Value);
   m.attachCallback('ch2:value', printCH2Value);
 
-  setInterval(periodic.bind(this, m), 4000);
+  m.sendCommand('sampling:rate 0').then(() => {
+    return m.sendCommand('sampling:depth 2');
+  }).then(() => {
+    return m.sendCommand('ch1:mapping 1');
+  }).then(() => {
+    return m.sendCommand('ch1:range_i 0');
+  }).then(() => {
+    return m.sendCommand('ch2:mapping 1');
+  }).then(() => {
+    return m.sendCommand('ch2:range_i 1');
+  }).then(() => {
+    return m.sendCommand('sampling:trigger 2');
+  }).then(() => {
+    //setInterval(periodic.bind(this, m), 4000);
+  });
 }
 
 function periodic(m) {
