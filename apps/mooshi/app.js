@@ -1,25 +1,13 @@
 
 var Layout = require("Layout");
 
-function showLog(txt) {
-  console.log(txt);
-}
-function showError(txt) {
-  console.log(txt);
-}
-
 process.on('uncaughtException', function (e) {
   console.log(e, e.stack ? "\n" + e.stack : "");
 });
 
-METER_SERVICE = "1BC5FFA0-0200-62AB-E411-F254E005DBD4";
-METER_SERIN = "1BC5FFA1-0200-62AB-E411-F254E005DBD4";
-METER_SEROUT = "1BC5FFA2-0200-62AB-E411-F254E005DBD4";
-
-OAD_SERVICE_UUID = "1BC5FFC0-0200-62AB-E411-F254E005DBD4";
-OAD_IMAGE_IDENTIFY = "1BC5FFC1-0200-62AB-E411-F254E005DBD4";
-OAD_IMAGE_BLOCK = "1BC5FFC2-0200-62AB-E411-F254E005DBD4";
-OAD_REBOOT = "1BC5FFC3-0200-62AB-E411-F254E005DBD4";
+const METER_SERVICE = "1BC5FFA0-0200-62AB-E411-F254E005DBD4";
+const METER_SERIN = "1BC5FFA1-0200-62AB-E411-F254E005DBD4";
+const METER_SEROUT = "1BC5FFA2-0200-62AB-E411-F254E005DBD4";
 
 function MeterSerializer(p, meter, callback) {
   this.P = p;
@@ -27,24 +15,23 @@ function MeterSerializer(p, meter, callback) {
   this.service = null;
   this.reader = null;
   this.writer = null;
-  this.desc = null;
   this.gatt = null;
   this.sendq = Promise.resolve();
 
   E.showMenu();
   E.showMessage("connecting");
 
-  this.P.on('gattserverdisconnected', () => showMainMenu());
+  this.P.on('gattserverdisconnected', () => showScanMenu());
 
   this.P.gatt.connect().then((g) => {
     this.gatt = g;
     return this.gatt.getPrimaryService(METER_SERVICE);
   }).then((sv) => {
-    service = sv;
-    return service.getCharacteristic(METER_SERIN);
+    this.service = sv;
+    return this.service.getCharacteristic(METER_SERIN);
   }).then((ch) => {
     this.writer = ch;
-    return service.getCharacteristic(METER_SEROUT);
+    return this.service.getCharacteristic(METER_SEROUT);
   }).then((ch) => {
     this.reader = ch;
     ch.on('characteristicvaluechanged', (event) => {
@@ -59,7 +46,7 @@ function MeterSerializer(p, meter, callback) {
     if (this.gatt && this.gatt.connected) {
       this.gatt.disconnect();
     }
-    E.showMenu(menu);
+    showScanMenu();
   });
 }
 
@@ -72,7 +59,7 @@ MeterSerializer.prototype.write = function (bytes) {
 
 MeterSerializer.prototype.handleError = function (err) {
   if (err) {
-    showLog("Error: " + err);
+    console.log("Error: " + err);
   }
 };
 
@@ -94,10 +81,7 @@ BytePack.prototype.putByte = function (v) {
 };
 
 BytePack.prototype.putBytes = function (v) {
-  for (var i = 0; i < v.length; i++) {
-    var byte = v[i];
-    this.putByte(byte);
-  }
+  v.forEach((b) => this.putByte(b));
 };
 
 BytePack.prototype.putInt = function (v, b) {
@@ -109,12 +93,9 @@ BytePack.prototype.putInt = function (v, b) {
   }
 };
 
-BytePack.prototype.putFloat = function (v, b) {
-  b = (typeof (b) == "undefined") ? 1 : b;
-  var farr = new Float32Array(b);
-  for (var i = 0; i < b; i++)
-    farr[i] = v[i];
-  var barr = new Uint8Array(farr.buffer);
+BytePack.prototype.putFloat = function (v) {
+  var barr = new Uint8Array(4);
+  new DataView(barr.buffer).setFloat32(0, v, true);
   this.putBytes(barr);
 };
 
@@ -270,20 +251,19 @@ ConfigNode.prototype.update = function () {
   "ram";
   if (this.code == -1) {
     if (this.needsShortCode()) {
-      showLog('This command does not have a value associated.');
+      console.log('This command does not have a value associated.');
     }
   }
 
   m.writeToMeter([this.code]);
 
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     this.response_handler = (value) => {
       resolve(value);
       this.response_handler = default_handler;
     };
-    m.tree.root.ADMIN.DIAGNOSTIC.notification_handler = (obj, msg) => {
-      // don't bomb out, keep going?
-      resolve(String.fromCharCode.apply(null, msg));
+    m.root.ADMIN.DIAGNOSTIC.notification_handler = (obj, msg) => {
+      reject(String.fromCharCode.apply(null, msg));
     };
   });
 };
@@ -294,7 +274,7 @@ ConfigNode.prototype.send = function (p) {
 
   if (this.code == -1) {
     if (this.needsShortCode()) {
-      showLog('This command does not have a value associated.');
+      console.log('This command does not have a value associated.');
     }
   }
   var b = new BytePack();
@@ -334,7 +314,7 @@ ConfigNode.prototype.send = function (p) {
         b.putBytes(p);
         break;
       default:
-        showLog("This command doesn't accept a payload");
+        console.log("This command doesn't accept a payload");
         return;
     }
   }
@@ -342,7 +322,7 @@ ConfigNode.prototype.send = function (p) {
   m.writeToMeter(b.bytes);
 
   return new Promise((resolve, reject) => {
-    m.tree.root.ADMIN.DIAGNOSTIC.notification_handler = (obj, msg) => {
+    m.root.ADMIN.DIAGNOSTIC.notification_handler = (obj, msg) => {
       reject(String.fromCharCode.apply(null, msg));
     };
     this.response_handler = (value) => resolve(value);
@@ -355,19 +335,19 @@ function ConfigTree(root) {
   this.root = root;
 }
 
-ConfigTree.prototype.enumerate = function (n, indent) {
-  if (typeof (n) == "undefined")
-    n = this.root;
-  if (typeof (indent) == "undefined")
-    indent = 0;
-  showLog("  ".repeat(indent) + n.toString());
-  for (var i = 0; i < n.children.length; i++) {
-    var c = n.children[i];
-    this.enumerate(c, indent + 1);
-  }
-  if (!indent)
-    showLog("");
-};
+// ConfigTree.prototype.enumerate = function (n, indent) {
+//   if (typeof (n) == "undefined")
+//     n = this.root;
+//   if (typeof (indent) == "undefined")
+//     indent = 0;
+//   console.log("  ".repeat(indent) + n.toString());
+//   for (var i = 0; i < n.children.length; i++) {
+//     var c = n.children[i];
+//     this.enumerate(c, indent + 1);
+//   }
+//   if (!indent)
+//     console.log("");
+// };
 
 ConfigTree.prototype.deserialize = function (buffer, offset) {
   var bytes = Uint8Array(buffer, offset);
@@ -378,7 +358,6 @@ ConfigTree.prototype.deserialize = function (buffer, offset) {
   offset += 3 + nlen;
   var children = [];
   for (var i = 0; i < n_children; i++) {
-    // bytes must be passed by reference for this to work.
     var obj = this.deserialize(buffer, offset);
     children[i] = obj.node;
     offset = obj.offset;
@@ -390,12 +369,13 @@ ConfigTree.prototype.deserialize = function (buffer, offset) {
 };
 
 ConfigTree.prototype.unpack = function (compressed) {
-  // Too expensive to decompress supplied tree, so supply it ourselves
+  // Too expensive to decompress supplied tree, so supply it and CRC32 ourselves
   // will need rechecking after a firmware update, but the last was years ago
   var data = require("heatshrink").decompress(atob("AAMNgEFoNEptJp0DgsFodSoczmUAhUEqlSotFgEJhVEpNBo9Op9TqlJocAgcLqFDoVfq1FqVTpNPpwaBglOoNNEIMFhAaBAwNfqtUD4MEhYKHr9NqcAhcFoVBqgtBgECgxIBoVPp9UgUAgxHBqVNoNMNoMIqdIpNQptPog9BBQREBqFMPANHgcCglSF4NFg5lBmMymoXBgYEBmAFCAgIFCgkxAoIGDmQGFmgGFnAGDgUFIgNQqlIggIBWYQEBm00GYQ/BnA/EmwPBg7EBpNHo6wBgYPBp9GowVBgy5BNINMOwUKobBBVgNOqtPqqoBDYNMp9Hg5/BaYUEhATBQYNSqykCgYrBqiPBDwUDg9Qp9MplEpNSDoMGNgI8BD4J8CEwNGp8DgkFAwIRBrEAgsIooHBr77DBQMHp1foVZEQJVCH4T4BbgIlJgyCCqY+BPYMEohYBoJ2CodImMIUQNNoNQqD/DgEHodVqQxBP4MBW4LwBMYRFBptQBYMDmc1BgMBJgNIoIbBoiMCqVBFYNFr9JEYMIBAKmBrLQBqY5Bgh5BBgJQCqVNO4dCqpnBYYMAhcFYwVVSQMLO5EDDIRBCAoSjBqApBhcOBIdMqdCmRIBXgNWawSRCmSRMqz5BVIJuBgRtBmyRCgYEBS/6X0gRlGKAMFoNVrFfqwHBgcwl0xK4QFBmYFCmMumQFBhQfBOQSsBp1DosFNQMxVAIbBVYUHBAYJEhAJEBQkJBQoLEhQLGBgkFolJp9EoraCKIcLhBRBU4NfqFXWII="));
   var obj = this.deserialize(data, 0);
   this.root = obj.node;
   this.assignShortCodes();
+  return 0xE9B18BB4;
 };
 
 ConfigTree.prototype.assignShortCodes = function () {
@@ -438,21 +418,6 @@ ConfigTree.prototype.getShortCodeList = function () {
   return rval;
 };
 
-// Test of config tree build
-function buildTree() {
-  // Abbreviations
-  var root = new ConfigNode(NTYPE.PLAIN, '', [
-    new ConfigNode(NTYPE.PLAIN, 'ADMIN', [
-      new ConfigNode(NTYPE.VAL_U32, 'CRC32'),
-      new ConfigNode(NTYPE.VAL_BIN, 'TREE'),
-      new ConfigNode(NTYPE.VAL_STR, 'DIAGNOSTIC')
-    ]),
-  ]);
-  var tree = new ConfigTree(root);
-  tree.assignShortCodes();
-  return tree;
-}
-
 //////////////////////////////////////////////////////////////
 
 function Mooshimeter() {
@@ -460,24 +425,24 @@ function Mooshimeter() {
   this.seq_wr = 0;
   this.aggregate = new Uint8Array([]);
   this.sendPromise = Promise.resolve();
-
-  // Initialize tree
-  this.tree = buildTree();
-  this.code_list = this.tree.getShortCodeList();
+  this.tree = new ConfigTree();
 }
 
 Mooshimeter.prototype.connect = function (serializer, callback) {
   E.showMessage("initializing");
 
   this.serializer = serializer;
-  this.tree.unpack();
+  var crc = this.tree.unpack();
+  this.root = this.tree.root;
   this.code_list = this.tree.getShortCodeList();
-  this.tree.root.ADMIN.CRC32.send(0xE9B18BB4).then(() => callback(true));
+  this.root.ADMIN.CRC32.send(crc).then(() => {
+    callback(true);
+  });
 };
 
-Mooshimeter.prototype.disconnect = function () {
-  //this.serializer.disconnect();
-};
+// Mooshimeter.prototype.disconnect = function () {
+//   this.serializer.disconnect();
+// };
 
 Mooshimeter.prototype.writeToMeter = function (bytes) {
   if (bytes.length > 19)
@@ -498,14 +463,15 @@ function bufferCat(a, b) {
 }
 
 Mooshimeter.prototype.readFromMeter = function (err, bytes) {
+  "ram";
   if (bytes.length == 0)
     return;
   var b = new ByteUnpack(bytes);
   var seq_n = b.get(1) & 0xFF;
   if (this.seq_n != -1 && seq_n != (this.seq_n + 1) % 0x100) {
-    showLog('Received out of order packet!');
-    showLog('Expected: ' + this.seq_n + 1);
-    showLog('Got     : ' + seq_n);
+    console.log('Received out of order packet!');
+    console.log('Expected: ' + this.seq_n + 1);
+    console.log('Got     : ' + seq_n);
   }
   this.seq_n = seq_n;
   this.aggregate = bufferCat(this.aggregate, Uint8Array(bytes, 1));
@@ -520,14 +486,14 @@ Mooshimeter.prototype.readFromMeter = function (err, bytes) {
         node = this.code_list[shortcode];
       }
       catch (KeyError) {
-        showLog('Received an unrecognized shortcode!');
+        console.log('Received an unrecognized shortcode!');
         return;
       }
 
       switch (node.ntype) {
         case NTYPE.PLAIN:
         case NTYPE.LINK:
-          showError("bad ntype");
+          console.log("bad ntype");
           break;
         case NTYPE.CHOOSER:
         case NTYPE.VAL_U8:
@@ -561,12 +527,15 @@ Mooshimeter.prototype.readFromMeter = function (err, bytes) {
           value = b.get(4, true, "float");
           break;
         default:
-          showError('Unknown');
+          console.log('Unknown');
       }
 
       if (value != undefined) {
         if (node.ntype == NTYPE.CHOOSER)
-          node.choice = node.children[value].name;
+          if (node.children[value].ntype == NTYPE.LINK)
+            node.choice = m.root.SHARED.choice;
+          else
+            node.choice = node.children[value];
         node.value = value;
         //console.log("Recv: ",node,value);
         node.response_handler(this,value);
@@ -585,27 +554,13 @@ Mooshimeter.prototype.readFromMeter = function (err, bytes) {
   }
 };
 
-// var configNodes = [
-//   'name',
-//   'sampling:rate',
-//   'sampling:depth',
-//   'sampling:trigger',
-//   'ch1:mapping',
-//   'ch1:range_i',
-//   'ch1:analysis',
-//   'ch1:offset',
-//   'ch2:mapping',
-//   'ch2:range_i',
-//   'ch2:analysis',
-//   'ch2:offset',
-//   'shared',
-// ];
-
 var layout = new Layout({
   type: "v", c: [
-    { type: "txt", font: "6x8", label: "Ch 1:", id: "ch1label" },
+    { type: "txt", font: "10%", label: "Channel 1:", id: "ch1label" },
+    { type: "txt", font: "10%", label: "--", id: "ch1map", bgCol: g.theme.bg, fillx: 1  },
     { type: "txt", font: "20%", label: "--", id: "ch1", bgCol: g.theme.bg, fillx: 1 },
-    { type: "txt", font: "6x8", label: "Ch 2:", id: "ch2label" },
+    { type: "txt", font: "10%", label: "Channel 2:", id: "ch2label" },
+    { type: "txt", font: "10%", label: "--", id: "ch2map", bgCol: g.theme.bg, fillx: 1  },
     { type: "txt", font: "20%", label: "--", id: "ch2", bgCol: g.theme.bg, fillx: 1 },
   ]
 }, { lazy: true });
@@ -613,33 +568,64 @@ var layout = new Layout({
 function run(m) {
   console.log("Running");
 
-  m.tree.root.CH1.VALUE.notification_handler = updateChValue.bind(layout.ch1);
-  m.tree.root.CH2.VALUE.notification_handler = updateChValue.bind(layout.ch2);
+  var updateList = [
+    //m.root.NAME,
+    m.root.SAMPLING.RATE,
+    m.root.SAMPLING.DEPTH,
+    m.root.SAMPLING.TRIGGER,
+    m.root.SHARED,
+    m.root.CH1.MAPPING,
+    m.root.CH1.RANGE_I,
+    m.root.CH1.ANALYSIS,
+    m.root.CH1.OFFSET,
+    m.root.CH2.MAPPING,
+    m.root.CH2.RANGE_I,
+    m.root.CH2.ANALYSIS,
+    m.root.CH2.OFFSET,
+  ];
 
-  m.tree.root.SAMPLING.RATE.send(0).then(() =>
-  m.tree.root.SAMPLING.DEPTH.send(2)).then(() =>
-  m.tree.root.CH1.MAPPING.send(1)).then(() =>
-  m.tree.root.CH1.RANGE_I.send(0)).then(() =>
-//  m.tree.root.CH2.MAPPING.send(1)).then(() =>
-  m.tree.root.SHARED.send(1)).then(() =>
-  m.tree.root.SAMPLING.TRIGGER.send(2)).then(() => {
+  updateList.reduce((p,i) => p.then(() => i.update()), Promise.resolve()).then(() =>
+  m.root.SAMPLING.TRIGGER.send(2)).then(() => {
     g.clear();
     layout.render();
     Bangle.drawWidgets();
     setInterval(periodic.bind(this, m), 4000);
     setInterval(updateLayout.bind(this), 500);
+
+    m.root.CH1.RANGE_I.notification_handler = updateRange.bind(m.root.CH1, layout.ch1map);
+    m.root.CH2.RANGE_I.notification_handler = updateRange.bind(m.root.CH2, layout.ch2map);
+    m.root.CH1.MAPPING.notification_handler = m.root.CH1.RANGE_I.notification_handler;
+    m.root.CH2.MAPPING.notification_handler = m.root.CH2.RANGE_I.notification_handler;
+
+    m.root.CH1.MAPPING.notification_handler.call(m.root.CH1, layout.ch1map);
+    m.root.CH2.MAPPING.notification_handler.call(m.root.CH2, layout.ch2map);
+
+    m.root.CH1.VALUE.notification_handler = updateChValue.bind(m.root.CH1, layout.ch1);
+    m.root.CH2.VALUE.notification_handler = updateChValue.bind(m.root.CH2, layout.ch2);
   }).catch((msg) => {
     console.log(msg);
   });
 }
 
-function updateChValue(widget, m, val) {
-  console.log(widget,val);
-  //widget.label = Math.round(val * 100) / 100;
+function updateChValue(widget) {
+  if (this.VALUE.max && this.VALUE.value > this.VALUE.max)
+    widget.label = "--";
+  else
+    widget.label = Math.round(this.VALUE.value * 100) / 100;
+}
+
+function updateRange(widget) {
+  try {
+    this.VALUE.max = 1.1 * parseInt(this.MAPPING.choice.children[this.RANGE_I.value].name);
+    widget.label = this.MAPPING.choice.name;
+  }
+  catch(err) {
+    console.log(err);
+  }
 }
 
 function periodic(m) {
-  m.tree.root.PCB_VERSION.send();
+  m.root.PCB_VERSION.update();
 }
 
 function updateLayout() {
@@ -660,22 +646,19 @@ function exit(m) {
   m.disconnect();
 }
 
-let menu = {
-  "": { "title": "Mooshimeter" }
-};
+let scanMenu = {};
 
-function showMainMenu() {
-  menu["Re-scan"] = () => scan();
-  menu["< Back"] = () => load();
-  return E.showMenu(menu);
+function showScanMenu() {
+  return E.showMenu(scanMenu);
 }
 
 function scan() {
-  menu = {
-    "": { "title": "Mooshimeter" },
+  scanMenu = {
+    "": { "title": "Mooshimeter DMM" },
   };
 
-  waitMessage();
+  E.showMenu();
+  E.showMessage("scanning");
 
   NRF.findDevices(devices => {
     devices.forEach(device => {
@@ -685,19 +668,20 @@ function scan() {
         deviceName = device.name;
       }
 
-      menu[deviceName] = () => connectMeter(device);
+      scanMenu[deviceName] = () => connectMeter(device);
     });
-    showMainMenu();
+    scanMenu["Re-scan"] = () => scan();
+    scanMenu["< Back"] = () => load();
+    showScanMenu();
   },
   {
-    filters: [{ services: ["1bc5ffa0-0200-62ab-e411-f254e005dbd4"] }],
+    filters: [{ services: [METER_SERVICE] }],
     active: true
   });
 }
 
-function waitMessage() {
-  E.showMenu();
-  E.showMessage("scanning");
+function start() {
+  scanMenu['20:cd:39:a0:b2:35']();
 }
 
 Bangle.loadWidgets();
