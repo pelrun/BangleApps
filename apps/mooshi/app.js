@@ -1,3 +1,4 @@
+var debug = false;
 
 var Layout = require("Layout");
 
@@ -268,9 +269,12 @@ ConfigNode.prototype.update = function () {
   });
 };
 
-ConfigNode.prototype.send = function (p) {
+ConfigNode.prototype.set = function (p) {
   "ram";
   p = (typeof (p) == "undefined") ? "" : p;
+
+  if (debug)
+    console.log("Set: ",this,p);
 
   if (this.code == -1) {
     if (this.needsShortCode()) {
@@ -334,20 +338,6 @@ ConfigNode.prototype.send = function (p) {
 function ConfigTree(root) {
   this.root = root;
 }
-
-// ConfigTree.prototype.enumerate = function (n, indent) {
-//   if (typeof (n) == "undefined")
-//     n = this.root;
-//   if (typeof (indent) == "undefined")
-//     indent = 0;
-//   console.log("  ".repeat(indent) + n.toString());
-//   for (var i = 0; i < n.children.length; i++) {
-//     var c = n.children[i];
-//     this.enumerate(c, indent + 1);
-//   }
-//   if (!indent)
-//     console.log("");
-// };
 
 ConfigTree.prototype.deserialize = function (buffer, offset) {
   var bytes = Uint8Array(buffer, offset);
@@ -435,14 +425,10 @@ Mooshimeter.prototype.connect = function (serializer, callback) {
   var crc = this.tree.unpack();
   this.root = this.tree.root;
   this.code_list = this.tree.getShortCodeList();
-  this.root.ADMIN.CRC32.send(crc).then(() => {
+  this.root.ADMIN.CRC32.set(crc).then(() => {
     callback(true);
   });
 };
-
-// Mooshimeter.prototype.disconnect = function () {
-//   this.serializer.disconnect();
-// };
 
 Mooshimeter.prototype.writeToMeter = function (bytes) {
   if (bytes.length > 19)
@@ -470,8 +456,7 @@ Mooshimeter.prototype.readFromMeter = function (err, bytes) {
   var seq_n = b.get(1) & 0xFF;
   if (this.seq_n != -1 && seq_n != (this.seq_n + 1) % 0x100) {
     console.log('Received out of order packet!');
-    console.log('Expected: ' + this.seq_n + 1);
-    console.log('Got     : ' + seq_n);
+    console.log('Want:' + this.seq_n + 1,' Got:' + seq_n);
   }
   this.seq_n = seq_n;
   this.aggregate = bufferCat(this.aggregate, Uint8Array(bytes, 1));
@@ -537,7 +522,8 @@ Mooshimeter.prototype.readFromMeter = function (err, bytes) {
           else
             node.choice = node.children[value];
         node.value = value;
-        //console.log("Recv: ",node,value);
+        if (debug)
+          console.log("Recv: ",node,value);
         node.response_handler(this,value);
         node.notification_handler(this, value);
       }
@@ -565,6 +551,8 @@ var layout = new Layout({
   ]
 }, { lazy: true });
 
+var menuActive = false;
+
 function run(m) {
   console.log("Running");
 
@@ -585,7 +573,7 @@ function run(m) {
   ];
 
   updateList.reduce((p,i) => p.then(() => i.update()), Promise.resolve()).then(() =>
-  m.root.SAMPLING.TRIGGER.send(2)).then(() => {
+  m.root.SAMPLING.TRIGGER.set(2)).then(() => {
     g.clear();
     layout.render();
     Bangle.drawWidgets();
@@ -602,6 +590,11 @@ function run(m) {
 
     m.root.CH1.VALUE.notification_handler = updateChValue.bind(m.root.CH1, layout.ch1);
     m.root.CH2.VALUE.notification_handler = updateChValue.bind(m.root.CH2, layout.ch2);
+
+    setWatch(function() {
+      menuMain();
+    }, BTN1, {edge:"rising", debounce:50, repeat:true});
+
   }).catch((msg) => {
     console.log(msg);
   });
@@ -629,7 +622,8 @@ function periodic(m) {
 }
 
 function updateLayout() {
-  layout.render();
+  if (!menuActive)
+    layout.render();
 }
 
 function connectMeter(device) {
@@ -645,6 +639,63 @@ function exit(m) {
   console.log("Disconnecting...");
   m.disconnect();
 }
+
+function menuMain() {
+  menuActive = true;
+  E.showMenu({
+    "":{title:"DMM Config"},
+    "< Back":()=>{
+      E.showMenu();
+      menuActive = false;
+      layout.forgetLazyState()
+    },
+    "Sampling":()=>menuSampling(),
+    "Channel 1":()=>menuChannel(m.root.CH1),
+    "Channel 2":()=>menuChannel(m.root.CH2),
+  });
+}
+
+function menuSampling() {
+  var rate = m.root.SAMPLING.RATE;
+  var depth = m.root.SAMPLING.DEPTH;
+  E.showMenu({
+    "":{title:"Sampling"},
+    "< Back":()=>menuMain(),
+    "Rate":{
+      value : rate.value,
+      min : 0, max : rate.children.length-1,
+      format : v => rate.children[v].name,
+      onchange : v => rate.set(v),
+    },
+    "Depth":{
+      value : depth.value,
+      min : 0, max : depth.children.length-1,
+      format : v => depth.children[v].name,
+      onchange : v => depth.set(v),
+    },
+  });
+}
+
+function menuChannel(ch) {
+  E.showMenu({
+    "":{title:ch.name},
+    "< Back":()=>menuMain,
+    "Measure": {
+      value : ch.MAPPING.value,
+      min : 0, max : ch.MAPPING.children.length-1,
+      format : v => ch.MAPPING.children[v].name,
+      onchange : v => ch.MAPPING.set(v),
+    },
+    "Range": {
+      value : ch.RANGE_I.value,
+      min : 0, max : ch.MAPPING.choice.children.length-1,
+      format : v => ch.MAPPING.choice.children[v].name,
+      onchange : v => ch.RANGE_I.set(v),
+    },
+  });
+}
+
+///////////////////////////////////////////////////////
 
 let scanMenu = {};
 
