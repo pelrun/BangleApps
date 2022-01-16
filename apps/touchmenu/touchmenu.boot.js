@@ -1,4 +1,5 @@
 E.showMenu = function(items) {
+  const th = 20; // title height
   var ar = Bangle.appRect;
   Bangle.removeAllListeners("drag");
   if(!items){
@@ -24,10 +25,10 @@ E.showMenu = function(items) {
     draw: () => {
       g.reset().setFont('12x20');
       m.info.predraw(g);
-      g.setColor(m.info.cB).fillRect(ar.x, ar.y + 20, ar.x2, ar.y2).setColor(m.info.cF);
+      g.setColor(m.info.cB).fillRect(ar.x, ar.y + th, ar.x2, ar.y2).setColor(m.info.cF);
       m.items.forEach((e, i) => {
-        const s = (i * 48) - m.scroll + ar.y + 20;
-        if(s < ar.y || s > ar.y2 - 44){
+        const s = (i * 48) - m.scroll + ar.y + th;
+        if(s < ar.y || s > ar.y2 - 44){ // FIXME
           return false;
         }
         if(i == m.selected){
@@ -39,7 +40,7 @@ E.showMenu = function(items) {
         if(e.icon){
           g.drawImage(e.icon, ar.x + 5, s + 5);
         }
-        if(e.type && s < ar.y2 - 42){
+        if(e.type && s < ar.y2 - 42){ // FIXME
           if(e.format){
             g.setFontAlign(1, -1, 0).drawString(e.format(e.value), ar.x2 - 10, s + 25).setFontAlign(-1, -1, 0);
           }else{
@@ -47,7 +48,7 @@ E.showMenu = function(items) {
           }
         }
       });
-      g.setColor(m.info.cAB).fillRect(ar.x, ar.y, ar.x2, ar.y + 20);
+      g.setColor(m.info.cAB).fillRect(ar.x, ar.y, ar.x2, ar.y + th);
       g.setColor(m.info.cAF).drawString(m.info.title, ar.x + (m.back ? 30 : 10), ar.y + 2);
       if(m.back){
         g.drawLine(ar.x + 5, ar.y + 10, ar.x + 20, ar.y + 10);
@@ -57,9 +58,9 @@ E.showMenu = function(items) {
       m.info.preflip(g, m.scroll > 0, m.scroll < (m.items.length - 1) * 48);
     },
     select: (x, y) => {
-      if(m.selected == -1 || m.selected !== Math.max(Math.min(Math.floor((y + m.scroll - ar.y - 20) / 48), m.items.length - 1), 0)){
+      if(m.selected == -1 || m.selected !== Math.max(Math.min(Math.floor((y + m.scroll - ar.y - th) / 48), m.items.length - 1), 0)){
         if(y){
-          if(y < ar.y + 20 || y > ar.y2){
+          if(y < ar.y + th || y > ar.y2){
             return false;
           }else{
             m.selected = Math.max(Math.min(Math.floor((y + m.scroll - ar.y - 20) / 48), m.items.length - 1), 0);
@@ -125,7 +126,7 @@ E.showMenu = function(items) {
       return false;
     }
     if(d.dx == 0 && d.dy == 0){
-      if(d.x < ar.x + 30 && d.y < ar.y + 20){
+      if(m.back && d.x < ar.x + 30 && d.y < ar.y + th){
         m.back();
         return false;
       }
@@ -133,7 +134,7 @@ E.showMenu = function(items) {
     }else{
       m.selected = -1;
       m.scroll -= d.dy;
-      m.scroll = Math.min(Math.max(m.scroll, 0), (m.items.length - 1) * 48);
+      m.scroll = Math.min(Math.max(m.scroll, 0), m.items.length * 48 - win.h + th);
       m.draw();
     }
   });
