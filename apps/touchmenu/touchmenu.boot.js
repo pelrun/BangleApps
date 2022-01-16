@@ -160,7 +160,7 @@ E.showAlert = function (e, t){
     E.showMenu(menu);
   });
 };
-E.showMessage = E.showAlert;
+//E.showMessage = E.showAlert;
 
 E.showPrompt = function (e, t){
   if(!e){
